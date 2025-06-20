@@ -1,0 +1,600 @@
+<?php
+
+namespace App\Actions\Fortify;
+
+use App\Models\User;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Validator;
+use Laravel\Fortify\Contracts\CreatesNewUsers;
+use Laravel\Jetstream\Jetstream;
+
+class CreateNewUser implements CreatesNewUsers
+{
+    use PasswordValidationRules;
+
+    /**
+     * Validate and create a newly registered user.
+     *
+     * @param  array<string, string>  $input
+     */
+    public function create(array $input): User
+    {
+        Validator::make($input, [
+            'name' => ['required', 'string', 'max:255'],
+            'email' => ['required', 'string', 'email', 'max:255', 'unique:users'],
+            'password' => $this->passwordRules(),
+            'terms' => Jetstream::hasTermsAndPrivacyPolicyFeature() ? ['accepted', 'required'] : '',
+        ])->validate();
+
+        return User::create([
+            'name' => $input['name'],
+            'email' => $input['email'],
+            'phone' => $input['phone'],
+            'address' => $input['address'],
+            'password' => Hash::make($input['password']),
+        ]);
+    }
+}
+<?php
+
+namespace App\Actions\Fortify;
+
+use Illuminate\Validation\Rules\Password;
+
+trait PasswordValidationRules
+{
+    /**
+     * Get the validation rules used to validate passwords.
+     *
+     * @return array<int, \Illuminate\Contracts\Validation\Rule|array<mixed>|string>
+     */
+    protected function passwordRules(): array
+    {
+        return ['required', 'string', Password::default(), 'confirmed'];
+    }
+}
+<?php
+
+namespace App\Actions\Fortify;
+
+use App\Models\User;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Validator;
+use Laravel\Fortify\Contracts\ResetsUserPasswords;
+
+class ResetUserPassword implements ResetsUserPasswords
+{
+    use PasswordValidationRules;
+
+    /**
+     * Validate and reset the user's forgotten password.
+     *
+     * @param  array<string, string>  $input
+     */
+    public function reset(User $user, array $input): void
+    {
+        Validator::make($input, [
+            'password' => $this->passwordRules(),
+        ])->validate();
+
+        $user->forceFill([
+            'password' => Hash::make($input['password']),
+        ])->save();
+    }
+}
+<?php
+
+namespace App\Actions\Fortify;
+
+use App\Models\User;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Validator;
+use Laravel\Fortify\Contracts\UpdatesUserPasswords;
+
+class UpdateUserPassword implements UpdatesUserPasswords
+{
+    use PasswordValidationRules;
+
+    /**
+     * Validate and update the user's password.
+     *
+     * @param  array<string, string>  $input
+     */
+    public function update(User $user, array $input): void
+    {
+        Validator::make($input, [
+            'current_password' => ['required', 'string', 'current_password:web'],
+            'password' => $this->passwordRules(),
+        ], [
+            'current_password.current_password' => __('The provided password does not match your current password.'),
+        ])->validateWithBag('updatePassword');
+
+        $user->forceFill([
+            'password' => Hash::make($input['password']),
+        ])->save();
+    }
+}
+<?php
+
+namespace App\Actions\Fortify;
+
+use App\Models\User;
+use Illuminate\Contracts\Auth\MustVerifyEmail;
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\Rule;
+use Laravel\Fortify\Contracts\UpdatesUserProfileInformation;
+
+class UpdateUserProfileInformation implements UpdatesUserProfileInformation
+{
+    /**
+     * Validate and update the given user's profile information.
+     *
+     * @param  array<string, mixed>  $input
+     */
+    public function update(User $user, array $input): void
+    {
+        Validator::make($input, [
+            'name' => ['required', 'string', 'max:255'],
+            'email' => ['required', 'email', 'max:255', Rule::unique('users')->ignore($user->id)],
+            'photo' => ['nullable', 'mimes:jpg,jpeg,png', 'max:1024'],
+        ])->validateWithBag('updateProfileInformation');
+
+        if (isset($input['photo'])) {
+            $user->updateProfilePhoto($input['photo']);
+        }
+
+        if ($input['email'] !== $user->email &&
+            $user instanceof MustVerifyEmail) {
+            $this->updateVerifiedUser($user, $input);
+        } else {
+            $user->forceFill([
+                'name' => $input['name'],
+                'email' => $input['email'],
+            ])->save();
+        }
+    }
+
+    /**
+     * Update the given verified user's profile information.
+     *
+     * @param  array<string, string>  $input
+     */
+    protected function updateVerifiedUser(User $user, array $input): void
+    {
+        $user->forceFill([
+            'name' => $input['name'],
+            'email' => $input['email'],
+            'email_verified_at' => null,
+        ])->save();
+
+        $user->sendEmailVerificationNotification();
+    }
+}
+<?php
+
+namespace App\Actions\Jetstream;
+
+use App\Models\User;
+use Laravel\Jetstream\Contracts\DeletesUsers;
+
+class DeleteUser implements DeletesUsers
+{
+    /**
+     * Delete the given user.
+     */
+    public function delete(User $user): void
+    {
+        $user->deleteProfilePhoto();
+        $user->tokens->each->delete();
+        $user->delete();
+    }
+}
+<?php
+
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+use App\Models\Category;
+use App\Models\Product;
+use COM;
+
+class AdminController extends Controller
+{
+    public function view_category(){
+        $data=Category::all();
+        return view('admin.category', compact('data'));
+    }
+    
+    public function add_category( Request $request){
+        $data=new Category;
+        $data->category_name=$request->category;
+        $data->save();
+
+        return redirect()->back()->with('message','Category Added Successfully');
+    }
+
+    public function delete_category($id){
+        $data=Category::find($id);
+        $data->delete();
+
+        return redirect()->back()->with('message','Category deleted successfully');
+    }
+
+    public function view_product(){
+        $Category=Category::all();
+        return view('admin.product', compact('Category'));
+    }
+
+    public function add_product(Request $request){
+        $product=new product;
+
+        $product->title=$request->title;
+        $product->description=$request->description;
+        $product->price=$request->price;
+        $product->quantity=$request->quantity;
+        $product->discount_price=$request->dis_price;
+        $product->category=$request->category;
+        $image=$request->image;
+        $imagename=time().'.'.$image->getClientOriginalExtension();
+        $request->image->move('product',$imagename);
+        $product->image=$imagename;
+
+        $product->save();
+        return redirect()->back()->with('message','Product added successfully');
+    }
+
+    public function show_product(){
+        $product=product::all();
+        return view('admin.show_product', compact('product'));
+    }
+
+    // Edit Product - Show edit form
+    public function edit_product($id){
+        $product = Product::find($id);
+        $category = Category::all();
+        
+        if(!$product) {
+            return redirect()->back()->with('error', 'Product not found');
+        }
+        
+        return view('admin.edit_product', compact('product', 'category'));
+    }
+
+    // Update Product
+    public function update_product(Request $request, $id){
+        $product = Product::find($id);
+        
+        if(!$product) {
+            return redirect()->back()->with('error', 'Product not found');
+        }
+
+        $product->title = $request->title;
+        $product->description = $request->description;
+        $product->price = $request->price;
+        $product->quantity = $request->quantity;
+        $product->discount_price = $request->dis_price;
+        $product->category = $request->category;
+
+        // Handle image update
+        if($request->hasFile('image')) {
+            // Delete old image if exists
+            if($product->image && file_exists(public_path('product/'.$product->image))) {
+                unlink(public_path('product/'.$product->image));
+            }
+            
+            $image = $request->image;
+            $imagename = time().'.'.$image->getClientOriginalExtension();
+            $request->image->move('product', $imagename);
+            $product->image = $imagename;
+        }
+
+        $product->save();
+        
+        return redirect()->route('show_product')->with('message', 'Product updated successfully');
+    }
+
+    // Delete Product
+    public function delete_product($id){
+        $product = Product::find($id);
+        
+        if(!$product) {
+            return redirect()->back()->with('error', 'Product not found');
+        }
+
+        // Delete image file if exists
+        if($product->image && file_exists(public_path('product/'.$product->image))) {
+            unlink(public_path('product/'.$product->image));
+        }
+
+        $product->delete();
+        
+        return redirect()->back()->with('message', 'Product deleted successfully');
+
+    }
+}
+<?php
+
+namespace App\Http\Controllers;
+
+abstract class Controller
+{
+    //
+}
+<?php
+
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use App\Models\User;
+use App\Models\Product;
+
+class HomeController extends Controller
+{
+
+    public function index(){
+        $product=Product::paginate(10);
+        return view('home.userpage',compact('product'));
+    }
+
+    public function redirect(){
+        $usertype=Auth::user()->usertype;
+
+        if($usertype=='1'){
+            return view('admin.home');
+        }
+        else{
+        $product=Product::paginate(3);
+        return view('home.userpage',compact('product'));    
+        }
+    }
+
+        public function product_details($id){
+            $product=product::find($id);
+            return view('home.product_details',compact('product'));
+        }
+
+        public function productDetails($id) {
+    $product = Product::findOrFail($id);
+    return view('product_details', compact('product'));
+}
+}
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class Category extends Model
+{
+    //
+}
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class Product extends Model
+{
+    //
+}
+<?php
+
+namespace App\Models;
+
+// use Illuminate\Contracts\Auth\MustVerifyEmail;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Foundation\Auth\User as Authenticatable;
+use Illuminate\Notifications\Notifiable;
+use Laravel\Fortify\TwoFactorAuthenticatable;
+use Laravel\Jetstream\HasProfilePhoto;
+use Laravel\Sanctum\HasApiTokens;
+
+class User extends Authenticatable
+{
+    use HasApiTokens;
+
+    /** @use HasFactory<\Database\Factories\UserFactory> */
+    use HasFactory;
+    use HasProfilePhoto;
+    use Notifiable;
+    use TwoFactorAuthenticatable;
+
+    /**
+     * The attributes that are mass assignable.
+     *
+     * @var array<int, string>
+     */
+    protected $fillable = [
+        'name',
+        'email',
+        'phone',
+        'address',
+        'password',
+    ];
+
+    /**
+     * The attributes that should be hidden for serialization.
+     *
+     * @var array<int, string>
+     */
+    protected $hidden = [
+        'password',
+        'remember_token',
+        'two_factor_recovery_codes',
+        'two_factor_secret',
+    ];
+
+    /**
+     * The accessors to append to the model's array form.
+     *
+     * @var array<int, string>
+     */
+    protected $appends = [
+        'profile_photo_url',
+    ];
+
+    /**
+     * Get the attributes that should be cast.
+     *
+     * @return array<string, string>
+     */<?php
+
+namespace App\Providers;
+
+use Illuminate\Support\ServiceProvider;
+
+class AppServiceProvider extends ServiceProvider
+{
+    /**
+     * Register any application services.
+     */
+    public function register(): void
+    {
+        //
+    }
+
+    /**
+     * Bootstrap any application services.
+     */
+    public function boot(): void
+    {
+        //
+    }
+}
+<?php
+
+namespace App\Providers;
+
+use App\Actions\Fortify\CreateNewUser;
+use App\Actions\Fortify\ResetUserPassword;
+use App\Actions\Fortify\UpdateUserPassword;
+use App\Actions\Fortify\UpdateUserProfileInformation;
+use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\ServiceProvider;
+use Illuminate\Support\Str;
+use Laravel\Fortify\Fortify;
+
+class FortifyServiceProvider extends ServiceProvider
+{
+    /**
+     * Register any application services.
+     */
+    public function register(): void
+    {
+        //
+    }
+
+    /**
+     * Bootstrap any application services.
+     */
+    public function boot(): void
+    {
+        Fortify::createUsersUsing(CreateNewUser::class);
+        Fortify::updateUserProfileInformationUsing(UpdateUserProfileInformation::class);
+        Fortify::updateUserPasswordsUsing(UpdateUserPassword::class);
+        Fortify::resetUserPasswordsUsing(ResetUserPassword::class);
+
+        RateLimiter::for('login', function (Request $request) {
+            $throttleKey = Str::transliterate(Str::lower($request->input(Fortify::username())).'|'.$request->ip());
+
+            return Limit::perMinute(5)->by($throttleKey);
+        });
+
+        RateLimiter::for('two-factor', function (Request $request) {
+            return Limit::perMinute(5)->by($request->session()->get('login.id'));
+        });
+    }
+}
+<?php
+
+namespace App\Providers;
+
+use App\Actions\Jetstream\DeleteUser;
+use Illuminate\Support\Facades\Vite;
+use Illuminate\Support\ServiceProvider;
+use Laravel\Jetstream\Jetstream;
+
+class JetstreamServiceProvider extends ServiceProvider
+{
+    /**
+     * Register any application services.
+     */
+    public function register(): void
+    {
+        //
+    }
+
+    /**
+     * Bootstrap any application services.
+     */
+    public function boot(): void
+    {
+        $this->configurePermissions();
+
+        Jetstream::deleteUsersUsing(DeleteUser::class);
+
+        Vite::prefetch(concurrency: 3);
+    }
+
+    /**
+     * Configure the permissions that are available within the application.
+     */
+    protected function configurePermissions(): void
+    {
+        Jetstream::defaultApiTokenPermissions(['read']);
+
+        Jetstream::permissions([
+            'create',
+            'read',
+            'update',
+            'delete',
+        ]);
+    }
+}
+<?php
+
+namespace App\View\Components;
+
+use Illuminate\View\Component;
+use Illuminate\View\View;
+
+class AppLayout extends Component
+{
+    /**
+     * Get the view / contents that represents the component.
+     */
+    public function render(): View
+    {
+        return view('layouts.app');
+    }
+}
+<?php
+
+namespace App\View\Components;
+
+use Illuminate\View\Component;
+use Illuminate\View\View;
+
+class GuestLayout extends Component
+{
+    /**
+     * Get the view / contents that represents the component.
+     */
+    public function render(): View
+    {
+        return view('layouts.guest');
+    }
+}
+
+    protected function casts(): array
+    {
+        return [
+            'email_verified_at' => 'datetime',
+            'password' => 'hashed',
+        ];
+    }
+}
